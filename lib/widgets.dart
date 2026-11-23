@@ -196,6 +196,12 @@ class SongTile extends StatelessWidget {
               trailing: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  if (looksGarbled(song.title))
+                    IconButton(
+                      icon: const Icon(Icons.warning_amber_rounded, color: Colors.amber),
+                      tooltip: 'اسم غير واضح، اضغط للتعديل',
+                      onPressed: () => editSongInfo(context, song),
+                    ),
                   if (userLib.isFav(song.id))
                     Padding(
                       padding: const EdgeInsets.only(right: 4),
@@ -258,6 +264,14 @@ void showSongMenu(BuildContext context, SongModel song, {String? playlist}) {
               subtitle: Text(artistOf(song)),
             ),
             const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.edit_outlined),
+              title: const Text('تعديل الاسم والفنان'),
+              onTap: () {
+                Navigator.pop(ctx);
+                editSongInfo(context, song);
+              },
+            ),
             ListTile(
               leading: Icon(
                 userLib.isFav(song.id) ? Icons.favorite : Icons.favorite_border,

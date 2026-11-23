@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:on_audio_query_forked/on_audio_query.dart';
@@ -14,7 +15,8 @@ class LrcLine {
 class LyricsResult {
   final List<LrcLine> synced;
   final String plain;
-  LyricsResult(this.synced, this.plain);
+  final String? problem; // garbled | network | deleted | null
+  LyricsResult(this.synced, this.plain, {this.problem});
   bool get hasAny => synced.isNotEmpty || plain.trim().isNotEmpty;
 }
 
@@ -37,55 +39,118 @@ List<LrcLine> parseLrc(String raw) {
 
 const _headers = {'User-Agent': 'musicApp/1.0 (personal use)'};
 final Map<int, LyricsResult> _mem = {};
+final Set<int> _noAuto = {};
 
 bool _hasText(Map<String, dynamic> m) =>
     ((m['syncedLyrics'] ?? '') as String).isNotEmpty ||
     ((m['plainLyrics'] ?? '') as String).isNotEmpty;
 
+// ---------- مطابقة الأسماء ----------
+String _norm(String s) {
+  var t = s.toLowerCase();
+  t = t.replaceAll(RegExp(r'[\u064B-\u065F\u0670\u0640]'), '');
+  t = t.replaceAll(RegExp(r'[أإآ]'), 'ا').replaceAll('ى', 'ي').replaceAll('ة', 'ه');
+  t = t.replaceAll(RegExp(r'\(.*?\)|\[.*?\]'), ' ');
+  t = t.replaceAll(RegExp(r'[^\p{L}\p{N}\s]', unicode: true), ' ');
+  return t.replaceAll(RegExp(r'\s+'), ' ').trim();
+}
+
+bool _similar(String a, String b) {
+  final x = _norm(a);
+  final y = _norm(b);
+  if (x.isEmpty || y.isEmpty) return false;
+  if (x == y || x.contains(y) || y.contains(x)) return true;
+  final tx = x.split(' ').toSet();
+  final ty = y.split(' ').toSet();
+  final common = tx.intersection(ty).length;
+  return common / math.min(tx.length, ty.length) >= 0.6;
+}
+
+// ---------- الاتصال بـ LRCLIB ----------
+Future<List<Map<String, dynamic>>> _searchRaw(String q) async {
+  final uri = Uri.https('lrclib.net', '/api/search', {'q': q});
+  final r = await http.get(uri, headers: _headers).timeout(const Duration(seconds: 15));
+  if (r.statusCode != 200) throw Exception('status ${r.statusCode}');
+  final list = jsonDecode(utf8.decode(r.bodyBytes)) as List;
+  return list.take(15).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+}
+
 Future<List<Map<String, dynamic>>> lrclibSearch(String title, String artist) async {
   try {
     final q = '$title $artist'.trim();
     if (q.isEmpty) return [];
-    final uri = Uri.https('lrclib.net', '/api/search', {'q': q});
-    final r = await http.get(uri, headers: _headers).timeout(const Duration(seconds: 10));
-    if (r.statusCode != 200) return [];
-    final list = jsonDecode(utf8.decode(r.bodyBytes)) as List;
-    return list.take(10).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    return await _searchRaw(q);
   } catch (_) {
     return [];
   }
 }
 
-Future<Map<String, dynamic>?> _autoFind(SongModel s) async {
+class _Found {
+  final Map<String, dynamic>? item;
+  final String? problem;
+  _Found(this.item, this.problem);
+}
+
+Future<_Found> _autoFind(SongModel s) async {
   final artist = artistOf(s);
   final known = artist != unknownArtist;
+  final dur = ((s.duration ?? 0) / 1000).round();
   try {
     if (known) {
       final uri = Uri.https('lrclib.net', '/api/get', {
         'track_name': s.title,
         'artist_name': artist,
-        'duration': ((s.duration ?? 0) / 1000).round().toString(),
+        'duration': dur.toString(),
       });
-      final r = await http.get(uri, headers: _headers).timeout(const Duration(seconds: 10));
+      final r = await http.get(uri, headers: _headers).timeout(const Duration(seconds: 15));
       if (r.statusCode == 200) {
         final m = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
-        if (_hasText(m)) return m;
+        if (_hasText(m)) return _Found(m, null);
       }
     }
-    final res = await lrclibSearch(s.title, known ? artist : '');
-    for (final m in res) {
-      if (_hasText(m)) return m;
+    final queries = <String>[known ? '${s.title} $artist' : s.title];
+    if (known) queries.add(s.title);
+    Map<String, dynamic>? best;
+    var bestScore = -1.0;
+    for (final q in queries) {
+      final res = await _searchRaw(q);
+      for (final m in res) {
+        if (!_hasText(m)) continue;
+        if (!_similar((m['trackName'] ?? '') as String, s.title)) continue;
+        final d = ((m['duration'] as num?) ?? 0).toDouble();
+        final diff = (dur > 0 && d > 0) ? (d - dur).abs() : 0.0;
+        if (diff > 8) continue;
+        final artistOk = !known || _similar((m['artistName'] ?? '') as String, artist);
+        if (!artistOk && !(dur > 0 && d > 0 && diff <= 3)) continue;
+        final synced = ((m['syncedLyrics'] ?? '') as String).isNotEmpty;
+        final score = 100 - diff + (synced ? 20 : 0) + (artistOk ? 30 : 0);
+        if (score > bestScore) {
+          bestScore = score;
+          best = m;
+        }
+      }
+      if (best != null) break;
     }
-  } catch (_) {}
-  return null;
+    return _Found(best, null);
+  } catch (_) {
+    return _Found(null, 'network');
+  }
 }
 
 Future<void> saveLyricsFor(int id, Map<String, dynamic> item) async {
   final synced = (item['syncedLyrics'] ?? '') as String;
   final plain = (item['plainLyrics'] ?? '') as String;
   _mem[id] = LyricsResult(parseLrc(synced), plain);
+  _noAuto.remove(id);
   final p = await SharedPreferences.getInstance();
   await p.setString('lyr_$id', jsonEncode({'s': synced, 'p': plain}));
+}
+
+Future<void> deleteLyricsFor(int id) async {
+  _mem.remove(id);
+  _noAuto.add(id);
+  final p = await SharedPreferences.getInstance();
+  await p.remove('lyr_$id');
 }
 
 Future<LyricsResult> getLyrics(SongModel s) async {
@@ -101,14 +166,18 @@ Future<LyricsResult> getLyrics(SongModel s) async {
       return r;
     } catch (_) {}
   }
-  final item = await _autoFind(s);
-  if (item == null) return LyricsResult([], '');
+  if (_noAuto.contains(s.id)) return LyricsResult([], '', problem: 'deleted');
+  if (looksGarbled(s.title)) return LyricsResult([], '', problem: 'garbled');
+  final f = await _autoFind(s);
+  final item = f.item;
+  if (item == null) return LyricsResult([], '', problem: f.problem);
   await saveLyricsFor(s.id, item);
   return _mem[s.id]!;
 }
 
 Future<void> clearLyricsCache() async {
   _mem.clear();
+  _noAuto.clear();
   final p = await SharedPreferences.getInstance();
   for (final k in p.getKeys().where((k) => k.startsWith('lyr_')).toList()) {
     await p.remove(k);
@@ -136,7 +205,7 @@ class _LyricsPageState extends State<LyricsPage> {
     final picked = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (_) => _LyricsSearchDialog(
-        initialTitle: s.title,
+        initialTitle: looksGarbled(s.title) ? '' : s.title,
         initialArtist: a == unknownArtist ? '' : a,
       ),
     );
@@ -144,6 +213,58 @@ class _LyricsPageState extends State<LyricsPage> {
       await saveLyricsFor(s.id, picked);
       if (mounted) setState(() => _reload(s));
     }
+  }
+
+  Future<void> _edit(SongModel s) async {
+    final changed = await editSongInfo(context, s);
+    if (changed && mounted) setState(() => _forId = null);
+  }
+
+  Widget _empty(SongModel song, String? problem) {
+    final garbled = problem == 'garbled';
+    final net = problem == 'network';
+    final msg = garbled
+        ? 'اسم الأغنية غير واضح (${song.title}).\nعدّل الاسم أول عشان نلقى كلماتها.'
+        : net
+            ? 'تعذر الاتصال بخدمة الكلمات.\nتأكد من الإنترنت وجرّب مرة ثانية.'
+            : 'ما لقينا كلمات مطابقة لهذي الأغنية.\nجرّب البحث اليدوي أو عدّل الاسم.';
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(net ? Icons.wifi_off : Icons.lyrics_outlined, size: 56, color: Colors.white38),
+            const SizedBox(height: 12),
+            Text(msg, textAlign: TextAlign.center),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              alignment: WrapAlignment.center,
+              children: [
+                FilledButton.icon(
+                  onPressed: () => _edit(song),
+                  icon: const Icon(Icons.edit_outlined),
+                  label: const Text('تعديل الاسم'),
+                ),
+                if (net)
+                  OutlinedButton.icon(
+                    onPressed: () => setState(() => _reload(song)),
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('إعادة المحاولة'),
+                  ),
+                OutlinedButton.icon(
+                  onPressed: () => _manual(song),
+                  icon: const Icon(Icons.search),
+                  label: const Text('بحث يدوي'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -170,17 +291,32 @@ class _LyricsPageState extends State<LyricsPage> {
                       Expanded(
                         child: Column(
                           children: [
-                            Text(song.title, maxLines: 1, overflow: TextOverflow.ellipsis,
+                            Text(song.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(fontWeight: FontWeight.bold)),
-                            Text(artistOf(song), maxLines: 1, overflow: TextOverflow.ellipsis,
+                            Text(artistOf(song),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(color: Colors.white54, fontSize: 12)),
                           ],
                         ),
                       ),
-                      IconButton(
-                        icon: const Icon(Icons.search),
-                        tooltip: 'بحث يدوي',
-                        onPressed: () => _manual(song),
+                      PopupMenuButton<String>(
+                        color: context.card,
+                        onSelected: (v) async {
+                          if (v == 'search') _manual(song);
+                          if (v == 'edit') _edit(song);
+                          if (v == 'delete') {
+                            await deleteLyricsFor(song.id);
+                            if (mounted) setState(() => _reload(song));
+                          }
+                        },
+                        itemBuilder: (_) => const [
+                          PopupMenuItem(value: 'search', child: Text('بحث يدوي عن الكلمات')),
+                          PopupMenuItem(value: 'edit', child: Text('تعديل اسم الأغنية')),
+                          PopupMenuItem(value: 'delete', child: Text('حذف الكلمات المحفوظة')),
+                        ],
                       ),
                     ],
                   ),
@@ -193,23 +329,7 @@ class _LyricsPageState extends State<LyricsPage> {
                         return const Center(child: CircularProgressIndicator());
                       }
                       final r = fs.data;
-                      if (r == null || !r.hasAny) {
-                        return Center(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.lyrics_outlined, size: 56, color: Colors.white38),
-                              const SizedBox(height: 12),
-                              const Text('ما لقينا كلمات لهذي الأغنية'),
-                              const SizedBox(height: 12),
-                              FilledButton(
-                                onPressed: () => _manual(song),
-                                child: const Text('بحث يدوي'),
-                              ),
-                            ],
-                          ),
-                        );
-                      }
+                      if (r == null || !r.hasAny) return _empty(song, r?.problem);
                       if (r.synced.isNotEmpty) {
                         return _SyncedView(key: ValueKey(song.id), lines: r.synced);
                       }
@@ -339,6 +459,11 @@ class _LyricsSearchDialogState extends State<_LyricsSearchDialog> {
     });
   }
 
+  String _dur(dynamic v) {
+    final d = (v as num?)?.toInt() ?? 0;
+    return '${d ~/ 60}:${(d % 60).toString().padLeft(2, '0')}';
+  }
+
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
@@ -368,9 +493,12 @@ class _LyricsSearchDialogState extends State<_LyricsSearchDialog> {
                       for (final m in _results)
                         ListTile(
                           dense: true,
-                          title: Text('${m['trackName'] ?? ''}', maxLines: 1, overflow: TextOverflow.ellipsis),
-                          subtitle: Text('${m['artistName'] ?? ''} • ${m['albumName'] ?? ''}',
+                          title: Text('${m['trackName'] ?? ''}',
                               maxLines: 1, overflow: TextOverflow.ellipsis),
+                          subtitle: Text(
+                              '${m['artistName'] ?? ''} • ${m['albumName'] ?? ''} • ${_dur(m['duration'])}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis),
                           trailing: Icon(((m['syncedLyrics'] ?? '') as String).isNotEmpty
                               ? Icons.timer_outlined
                               : Icons.notes),

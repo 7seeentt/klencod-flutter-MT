@@ -42,12 +42,28 @@ String albumOf(SongModel s) {
   return (a == null || a == '<unknown>') ? 'ألبوم غير معروف' : a;
 }
 
+/// هل الاسم يشبه معرّف عشوائي مثل a3938fdjei0 ؟
+bool looksGarbled(String t) {
+  final s = t.trim();
+  if (s.isEmpty) return true;
+  if (s.contains(' ')) return false;
+  if (s.length < 8 || s.length > 24) return false;
+  if (!RegExp(r'^[A-Za-z0-9_\-]+$').hasMatch(s)) return false;
+  final hasDigit = RegExp(r'\d').hasMatch(s);
+  final hasLetter = RegExp(r'[A-Za-z]').hasMatch(s);
+  final camel = RegExp(r'[a-z][A-Z]').hasMatch(s);
+  return (hasDigit && hasLetter) || camel;
+}
+
 List<SongModel> songsByIds(List<int> ids) {
   final byId = {for (final s in allSongs) s.id: s};
   return [for (final id in ids) if (byId[id] != null) byId[id]!];
 }
 
 void sortSongs(List<SongModel> l) {
+  for (var i = 0; i < l.length; i++) {
+    l[i] = applyOverride(l[i]);
+  }
   switch (settings.sortIndex) {
     case 1:
       l.sort((a, b) => artistOf(a).toLowerCase().compareTo(artistOf(b).toLowerCase()));
@@ -99,6 +115,14 @@ class AppSettings extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// يخلّي الصفحة الرئيسية تعيد بناء القوائم فورًا (بعد تعديل اسم أغنية)
+  void refreshLibrary() {
+    minSeconds += 1;
+    notifyListeners();
+    minSeconds -= 1;
+    notifyListeners();
+  }
+
   Map<String, dynamic> toMap() => {
         'accent': accentIndex, 'amoled': amoled, 'dyn': dynamicColors,
         'blur': blurBg, 'min': minSeconds, 'sort': sortIndex,
@@ -116,6 +140,104 @@ class AppSettings extends ChangeNotifier {
 
 final settings = AppSettings();
 
+// ---------- تعديل أسماء الأغاني (يتحفظ داخل التطبيق فقط) ----------
+final Map<int, Map<String, String>> _overrides = {};
+final Map<int, SongModel> _origs = {};
+
+bool hasOverride(int id) => _overrides.containsKey(id);
+
+Future<void> loadOverrides() async {
+  final p = await SharedPreferences.getInstance();
+  final raw = p.getString('overrides');
+  if (raw == null) return;
+  try {
+    final m = jsonDecode(raw) as Map<String, dynamic>;
+    for (final e in m.entries) {
+      final v = Map<String, dynamic>.from(e.value as Map);
+      _overrides[int.parse(e.key)] = {
+        't': (v['t'] ?? '') as String,
+        'a': (v['a'] ?? '') as String,
+      };
+    }
+  } catch (_) {}
+}
+
+Future<void> _saveOverrides() async {
+  final p = await SharedPreferences.getInstance();
+  await p.setString(
+      'overrides', jsonEncode(_overrides.map((k, v) => MapEntry(k.toString(), v))));
+}
+
+SongModel applyOverride(SongModel s) {
+  final base = _origs.putIfAbsent(s.id, () => s);
+  final o = _overrides[s.id];
+  if (o == null) return base;
+  final m = Map<dynamic, dynamic>.from(base.getMap);
+  final t = o['t'] ?? '';
+  final a = o['a'] ?? '';
+  if (t.isNotEmpty) m['title'] = t;
+  if (a.isNotEmpty) m['artist'] = a;
+  return SongModel(m);
+}
+
+Future<void> setOverride(int id, String title, String artist) async {
+  if (title.isEmpty && artist.isEmpty) {
+    _overrides.remove(id);
+  } else {
+    _overrides[id] = {'t': title, 'a': artist};
+  }
+  await _saveOverrides();
+  for (var i = 0; i < queue.length; i++) {
+    if (queue[i].id == id) queue[i] = applyOverride(queue[i]);
+  }
+  for (var i = 0; i < allSongs.length; i++) {
+    if (allSongs[i].id == id) allSongs[i] = applyOverride(allSongs[i]);
+  }
+  settings.refreshLibrary();
+}
+
+Future<bool> editSongInfo(BuildContext context, SongModel s) async {
+  final t = TextEditingController(text: s.title);
+  final artist = artistOf(s);
+  final a = TextEditingController(text: artist == unknownArtist ? '' : artist);
+  final res = await showDialog<String>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: context.card,
+      title: const Text('تعديل بيانات الأغنية'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(controller: t, decoration: const InputDecoration(labelText: 'اسم الأغنية')),
+            const SizedBox(height: 8),
+            TextField(controller: a, decoration: const InputDecoration(labelText: 'الفنان')),
+            const SizedBox(height: 10),
+            const Text('التعديل يتحفظ داخل التطبيق فقط ولا يغيّر الملف الأصلي',
+                style: TextStyle(color: Colors.white54, fontSize: 12)),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+        if (hasOverride(s.id))
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, 'reset'), child: const Text('استعادة الأصلي')),
+        FilledButton(onPressed: () => Navigator.pop(ctx, 'save'), child: const Text('حفظ')),
+      ],
+    ),
+  );
+  if (res == 'save') {
+    await setOverride(s.id, t.text.trim(), a.text.trim());
+    return true;
+  }
+  if (res == 'reset') {
+    await setOverride(s.id, '', '');
+    return true;
+  }
+  return false;
+}
+
 // ---------- المفضلة وقوائم التشغيل ----------
 class UserLibrary extends ChangeNotifier {
   Set<int> favorites = {};
@@ -123,6 +245,7 @@ class UserLibrary extends ChangeNotifier {
   SharedPreferences? _p;
 
   Future<void> load() async {
+    await loadOverrides();
     final p = await SharedPreferences.getInstance();
     _p = p;
     favorites = (p.getStringList('fav') ?? []).map(int.parse).toSet();
@@ -284,7 +407,7 @@ Future<void> restoreLast(List<SongModel> all) async {
     final ids = p.getStringList('queue_ids');
     if (ids == null || ids.isEmpty) return;
     final byId = {for (final s in all) s.id.toString(): s};
-    final songs = [for (final id in ids) if (byId[id] != null) byId[id]!];
+    final songs = [for (final id in ids) if (byId[id] != null) applyOverride(byId[id]!)];
     if (songs.isEmpty) return;
     var index = p.getInt('last_index') ?? 0;
     if (index >= songs.length) index = 0;

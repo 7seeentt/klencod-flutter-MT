@@ -69,6 +69,13 @@ class SettingsPage extends StatelessWidget {
             ),
             _section(context, 'المكتبة'),
             ListTile(
+              leading: const Icon(Icons.edit_note),
+              title: const Text('إصلاح أسماء الأغاني'),
+              subtitle: const Text('عدّل الأسماء غير الواضحة'),
+              onTap: () => Navigator.of(context)
+                  .push(MaterialPageRoute(builder: (_) => const FixNamesPage())),
+            ),
+            ListTile(
               title: const Text('ترتيب الأغاني'),
               trailing: DropdownButton<int>(
                 value: settings.sortIndex,
@@ -103,6 +110,7 @@ class SettingsPage extends StatelessWidget {
             ListTile(
               leading: const Icon(Icons.delete_sweep_outlined),
               title: const Text('مسح كاش الكلمات'),
+              subtitle: const Text('امسحها إذا كانت كلمات غلط انحفظت قبل'),
               onTap: () async {
                 await clearLyricsCache();
                 if (context.mounted) toast(context, 'تم مسح الكلمات المحفوظة');
@@ -133,10 +141,108 @@ class SettingsPage extends StatelessWidget {
             const ListTile(
               leading: Icon(Icons.music_note_rounded),
               title: Text('musicApp'),
-              subtitle: Text('الإصدار 3.0'),
+              subtitle: Text('الإصدار 3.1'),
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ---------- صفحة إصلاح الأسماء ----------
+class FixNamesPage extends StatefulWidget {
+  const FixNamesPage({super.key});
+  @override
+  State<FixNamesPage> createState() => _FixNamesPageState();
+}
+
+class _FixNamesPageState extends State<FixNamesPage> {
+  final _q = TextEditingController();
+
+  @override
+  void dispose() {
+    _q.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = _q.text.trim().toLowerCase();
+    final list = allSongs
+        .where((s) =>
+            t.isEmpty ||
+            s.title.toLowerCase().contains(t) ||
+            artistOf(s).toLowerCase().contains(t))
+        .toList();
+    list.sort((a, b) {
+      final ga = looksGarbled(a.title) ? 0 : 1;
+      final gb = looksGarbled(b.title) ? 0 : 1;
+      return ga != gb ? ga.compareTo(gb) : a.title.toLowerCase().compareTo(b.title.toLowerCase());
+    });
+    final bad = allSongs.where((s) => looksGarbled(s.title)).length;
+    return Scaffold(
+      appBar: AppBar(title: const Text('إصلاح أسماء الأغاني'), backgroundColor: Colors.transparent),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                bad == 0
+                    ? 'كل الأسماء تبدو واضحة'
+                    : '$bad أغنية بأسماء غير واضحة (تظهر أول القائمة)',
+                style: TextStyle(color: bad == 0 ? Colors.white54 : Colors.amber),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: TextField(
+              controller: _q,
+              onChanged: (_) => setState(() {}),
+              decoration: InputDecoration(
+                hintText: 'ابحث',
+                prefixIcon: const Icon(Icons.search),
+                filled: true,
+                fillColor: context.card,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+            ),
+          ),
+          Expanded(
+            child: ListView.builder(
+              itemExtent: 72,
+              itemCount: list.length,
+              itemBuilder: (_, i) {
+                final s = list[i];
+                final bad = looksGarbled(s.title);
+                return ListTile(
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 20),
+                  leading: Art(id: s.id, size: 48, radius: 10),
+                  title: Text(s.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                  subtitle: Text(
+                    '${artistOf(s)}${hasOverride(s.id) ? ' • معدّلة' : ''}',
+                    maxLines: 1,
+                    style: const TextStyle(color: Colors.white54),
+                  ),
+                  trailing: Icon(
+                    bad ? Icons.warning_amber_rounded : Icons.edit_outlined,
+                    color: bad ? Colors.amber : Colors.white38,
+                  ),
+                  onTap: () async {
+                    await editSongInfo(context, s);
+                    if (mounted) setState(() {});
+                  },
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }
