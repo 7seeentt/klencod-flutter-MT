@@ -7,6 +7,8 @@ import 'core.dart';
 import 'widgets.dart';
 import 'player_ui.dart';
 import 'settings_page.dart';
+import 'stats.dart';
+import 'home_tab.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -19,6 +21,7 @@ Future<void> main() async {
   );
   await settings.load();
   await userLib.load();
+  stats.start();
   player.currentIndexStream.listen((_) => saveProgress());
   player.playingStream.listen((playing) {
     if (!playing) saveProgress();
@@ -405,7 +408,7 @@ class _HomePageState extends State<HomePage> {
     }
     if (!_granted) return Scaffold(body: _permissionView());
     return DefaultTabController(
-      length: 5,
+      length: 6,
       child: Scaffold(
         body: SafeArea(
           child: Column(
@@ -473,6 +476,7 @@ class _HomePageState extends State<HomePage> {
                 labelStyle: const TextStyle(fontWeight: FontWeight.w600),
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 tabs: const [
+                  Tab(text: 'الرئيسية'),
                   Tab(text: 'الأغاني'),
                   Tab(text: 'الألبومات'),
                   Tab(text: 'الفنانين'),
@@ -483,6 +487,7 @@ class _HomePageState extends State<HomePage> {
               Expanded(
                 child: TabBarView(
                   children: [
+                    const SmartHome(),
                     _songsTab(),
                     _albumsTab(),
                     _artistsTab(),
