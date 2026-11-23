@@ -4,12 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:just_audio_background/just_audio_background.dart';
 import 'package:on_audio_query_forked/on_audio_query.dart';
 import 'core.dart';
-import 'intro.dart';
 import 'widgets.dart';
 import 'player_ui.dart';
 import 'settings_page.dart';
 import 'stats.dart';
 import 'home_tab.dart';
+import 'intro.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -55,69 +55,7 @@ class MyApp extends StatelessWidget {
       builder: (context, _) => MaterialApp(
         debugShowCheckedModeBanner: false,
         theme: buildTheme(),
-        home: const SplashPage(),
-      ),
-    );
-  }
-}
-
-// ---------- شاشة البداية ----------
-class SplashPage extends StatefulWidget {
-  const SplashPage({super.key});
-  @override
-  State<SplashPage> createState() => _SplashPageState();
-}
-
-class _SplashPageState extends State<SplashPage> {
-  @override
-  void initState() {
-    super.initState();
-    Future.delayed(const Duration(milliseconds: 1600), () {
-      if (!mounted) return;
-      Navigator.of(context).pushReplacement(PageRouteBuilder(
-        transitionDuration: const Duration(milliseconds: 500),
-        pageBuilder: (_, __, ___) => const HomePage(),
-        transitionsBuilder: (_, a, __, child) => FadeTransition(opacity: a, child: child),
-      ));
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final a = context.accent;
-    return Scaffold(
-      body: Center(
-        child: TweenAnimationBuilder<double>(
-          tween: Tween<double>(begin: 0.0, end: 1.0),
-          duration: const Duration(milliseconds: 900),
-          curve: Curves.easeOutBack,
-          builder: (_, v, child) => Opacity(
-            opacity: v.clamp(0.0, 1.0).toDouble(),
-            child: Transform.scale(scale: 0.6 + 0.4 * v, child: child),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 110,
-                height: 110,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(32),
-                  gradient: LinearGradient(
-                    colors: [a, Color.lerp(a, Colors.black, 0.5)!],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                  boxShadow: [BoxShadow(color: a.withAlpha(90), blurRadius: 40)],
-                ),
-                child: const Icon(Icons.music_note_rounded, size: 64, color: Colors.white),
-              ),
-              const SizedBox(height: 20),
-              const Text('musicApp',
-                  style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, letterSpacing: 1)),
-            ],
-          ),
-        ),
+        home: IntroSplash(next: (_) => const HomePage()),
       ),
     );
   }
