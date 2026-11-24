@@ -10,6 +10,8 @@ import 'settings_page.dart';
 import 'stats.dart';
 import 'home_tab.dart';
 import 'intro.dart';
+import 'cloud.dart';
+import 'cloud_pages.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -22,6 +24,7 @@ Future<void> main() async {
   );
   await settings.load();
   await userLib.load();
+  await cloud.init();
   stats.start();
   player.currentIndexStream.listen((_) => saveProgress());
   player.playingStream.listen((playing) {
@@ -83,12 +86,14 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     settings.addListener(_onSettings);
+    cloud.library.addListener(_onCloud);
     _init();
   }
 
   @override
   void dispose() {
     settings.removeListener(_onSettings);
+    cloud.library.removeListener(_onCloud);
     _search.dispose();
     super.dispose();
   }
@@ -99,6 +104,13 @@ class _HomePageState extends State<HomePage> {
       _compute();
       _filter(_search.text);
     }
+  }
+
+  void _onCloud() {
+    if (_raw.isEmpty) return;
+    _compute();
+    restoreLast([..._raw, ...allSongs.where((s) => s.id < 0)]);
+    _filter(_search.text);
   }
 
   Future<void> _init() async {
@@ -119,7 +131,9 @@ class _HomePageState extends State<HomePage> {
   void _compute() {
     _sortKey = settings.sortIndex;
     _minKey = settings.minSeconds;
+    final localKeys = {for (final s in _raw) cloud.keyOfSong(s)};
     allSongs = _raw.where((s) => (s.duration ?? 0) >= settings.minSeconds * 1000).toList();
+    allSongs.addAll(cloud.extraSongs(localKeys));
     sortSongs(allSongs);
     _albums = _group(allSongs, albumOf);
     _artists = _group(allSongs, artistOf);
@@ -134,8 +148,9 @@ class _HomePageState extends State<HomePage> {
     );
     _raw = res.where((s) => (s.isMusic ?? true) && s.uri != null).toList();
     _compute();
-    await restoreLast(_raw);
+    await restoreLast([..._raw, ...allSongs.where((s) => s.id < 0)]);
     if (mounted) _filter(_search.text);
+    cloud.startupSync();
   }
 
   void _filter(String q) {
@@ -353,7 +368,7 @@ class _HomePageState extends State<HomePage> {
           child: Column(
             children: [
               Padding(
-                padding: const EdgeInsets.fromLTRB(20, 12, 12, 8),
+                padding: const EdgeInsets.fromLTRB(20, 12, 4, 8),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -364,13 +379,23 @@ class _HomePageState extends State<HomePage> {
                               style: TextStyle(fontSize: 30, fontWeight: FontWeight.bold)),
                         ),
                         if (allSongs.isNotEmpty)
-                          FilledButton.icon(
+                          IconButton(
+                            icon: const Icon(Icons.shuffle),
+                            tooltip: 'عشوائي',
                             onPressed: () => playQueue(
                                 allSongs, math.Random().nextInt(allSongs.length),
                                 shuffle: true),
-                            icon: const Icon(Icons.shuffle),
-                            label: const Text('عشوائي'),
                           ),
+                        ListenableBuilder(
+                          listenable: cloud,
+                          builder: (_, __) => IconButton(
+                            icon: Icon(cloud.signedIn
+                                ? Icons.cloud_done_outlined
+                                : Icons.cloud_outlined),
+                            tooltip: 'الحساب والسحابة',
+                            onPressed: () => _open(const CloudPage()),
+                          ),
+                        ),
                         IconButton(
                           icon: const Icon(Icons.settings_outlined),
                           tooltip: 'الإعدادات',
@@ -382,7 +407,7 @@ class _HomePageState extends State<HomePage> {
                         style: const TextStyle(color: Colors.white54)),
                     const SizedBox(height: 12),
                     Padding(
-                      padding: const EdgeInsets.only(right: 8),
+                      padding: const EdgeInsets.only(right: 16),
                       child: TextField(
                         controller: _search,
                         onChanged: _filter,
