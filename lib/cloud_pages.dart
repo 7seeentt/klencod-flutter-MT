@@ -562,7 +562,7 @@ class CloudPage extends StatelessWidget {
                   children: [
                     Text(u.email ?? '',
                         maxLines: 1,
-                        overflow: TextOverflow.ellips
+                        overflow: TextOverflow.ellipsis,
                         style: const TextStyle(fontWeight: FontWeight.bold)),
                     Text(
                       cloud.lastSync == null
