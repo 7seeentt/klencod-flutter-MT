@@ -1,7 +1,9 @@
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'core.dart';
+import 'cloud.dart';
+import 'cloud_pages.dart';
+import 'brand.dart';
 
 Route<void> _fadeTo(WidgetBuilder b) => PageRouteBuilder<void>(
       transitionDuration: const Duration(milliseconds: 600),
@@ -17,12 +19,9 @@ class IntroSplash extends StatefulWidget {
   State<IntroSplash> createState() => _IntroSplashState();
 }
 
-class _IntroSplashState extends State<IntroSplash> with TickerProviderStateMixin {
+class _IntroSplashState extends State<IntroSplash> with SingleTickerProviderStateMixin {
   late final AnimationController _c =
-      AnimationController(vsync: this, duration: const Duration(milliseconds: 2400));
-  late final AnimationController _bars =
-      AnimationController(vsync: this, duration: const Duration(milliseconds: 1100))..repeat();
-  bool _first = false;
+      AnimationController(vsync: this, duration: const Duration(milliseconds: 2200));
 
   @override
   void initState() {
@@ -32,132 +31,129 @@ class _IntroSplashState extends State<IntroSplash> with TickerProviderStateMixin
 
   Future<void> _run() async {
     final p = await SharedPreferences.getInstance();
-    _first = !(p.getBool('onboarded') ?? false);
-    _c.forward();
-    await Future.delayed(const Duration(milliseconds: 2800));
+    final onboarded = p.getBool('onboarded') ?? false;
+    final guest = p.getBool('guest') ?? false;
+    await _c.forward();
+    await Future.delayed(const Duration(milliseconds: 350));
     if (!mounted) return;
-    Navigator.of(context).pushReplacement(
-      _fadeTo((ctx) => _first ? OnboardingPage(next: widget.next) : widget.next(ctx)),
-    );
+    final needLogin = cloud.configured && !cloud.signedIn && !guest;
+    Navigator.of(context).pushReplacement(_fadeTo(
+      (ctx) => _Flow(onboarding: !onboarded, login: needLogin, next: widget.next),
+    ));
   }
 
   @override
   void dispose() {
     _c.dispose();
-    _bars.dispose();
     super.dispose();
   }
 
-  Animation<double> _iv(double a, double b, Curve c) =>
-      CurvedAnimation(parent: _c, curve: Interval(a, b, curve: c));
+  double _seg(double a, double b) => ((_c.value - a) / (b - a)).clamp(0.0, 1.0).toDouble();
+
+  double _bar(int i) {
+    final t = ((_c.value - (0.20 + 0.06 * i)) / 0.25).clamp(0.0, 1.0).toDouble();
+    return Curves.easeOutCubic.transform(t);
+  }
 
   @override
   Widget build(BuildContext context) {
-    final a = context.accent;
-    final logoScale = _iv(0.0, 0.40, Curves.easeOutBack);
-    final logoFade = _iv(0.0, 0.25, Curves.easeOut);
-    final text = _iv(0.30, 0.60, Curves.easeOut);
-    final tag = _iv(0.55, 0.85, Curves.easeOut);
     return Scaffold(
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          AnimatedBuilder(
-            animation: _c,
-            builder: (_, __) => Container(
-              decoration: BoxDecoration(
-                gradient: RadialGradient(
-                  center: const Alignment(0, -0.15),
-                  radius: 0.4 + 0.5 * _c.value,
-                  colors: [a.withAlpha((90 * _c.value).round()), Colors.transparent],
-                ),
-              ),
-            ),
-          ),
-          Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                ScaleTransition(
-                  scale: logoScale,
-                  child: FadeTransition(
-                    opacity: logoFade,
-                    child: Container(
-                      width: 124,
-                      height: 124,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(36),
-                        gradient: LinearGradient(
-                          colors: [a, Color.lerp(a, Colors.black, 0.55)!],
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                        ),
-                        boxShadow: [BoxShadow(color: a.withAlpha(120), blurRadius: 50)],
-                      ),
-                      child: AnimatedBuilder(
-                        animation: _bars,
-                        builder: (_, __) => Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          crossAxisAlignment: CrossAxisAlignment.center,
-                          children: List.generate(5, (i) {
-                            final h = 18 +
-                                40 * (0.5 + 0.5 * math.sin(_bars.value * 2 * math.pi + i * 0.9));
-                            return Container(
-                              width: 8,
-                              height: h,
-                              margin: const EdgeInsets.symmetric(horizontal: 3),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                            );
-                          }),
-                        ),
-                      ),
-                    ),
+      body: AnimatedBuilder(
+        animation: _c,
+        builder: (context, _) {
+          final pop = Curves.easeOutBack.transform(_seg(0.0, 0.30));
+          final fade = _seg(0.0, 0.18);
+          final word = Curves.easeOut.transform(_seg(0.55, 0.80));
+          final sub = Curves.easeOut.transform(_seg(0.70, 0.95));
+          final glow = _seg(0.0, 0.5);
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: RadialGradient(
+                    center: const Alignment(0, -0.1),
+                    radius: 0.9,
+                    colors: [brandColor.withAlpha((70 * glow).round()), Colors.transparent],
                   ),
                 ),
-                const SizedBox(height: 28),
-                FadeTransition(
-                  opacity: text,
-                  child: SlideTransition(
-                    position: Tween<Offset>(begin: const Offset(0, 0.4), end: Offset.zero)
-                        .animate(text),
-                    child: const Text(
-                      'musicApp',
-                      style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, letterSpacing: 2),
+              ),
+              Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Opacity(
+                      opacity: fade,
+                      child: Transform.scale(
+                        scale: 0.7 + 0.3 * pop,
+                        child: BrandMark(size: 120, bars: [for (var i = 0; i < 5; i++) _bar(i)]),
+                      ),
                     ),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                FadeTransition(
-                  opacity: tag,
-                  child: const Text('موسيقاك .. بطريقتك',
-                      style: TextStyle(color: Colors.white54, fontSize: 15)),
-                ),
-              ],
-            ),
-          ),
-          Positioned(
-            bottom: 56,
-            left: 90,
-            right: 90,
-            child: AnimatedBuilder(
-              animation: _c,
-              builder: (_, __) => ClipRRect(
-                borderRadius: BorderRadius.circular(4),
-                child: LinearProgressIndicator(
-                  value: _c.value,
-                  minHeight: 3,
-                  backgroundColor: Colors.white10,
-                  color: a,
+                    const SizedBox(height: 34),
+                    Opacity(
+                      opacity: word,
+                      child: Transform.translate(
+                        offset: Offset(0, 14 * (1 - word)),
+                        child: const Text('MT',
+                            style: TextStyle(
+                                fontSize: 42, fontWeight: FontWeight.w800, letterSpacing: 8)),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Opacity(
+                      opacity: sub,
+                      child: const Text('MUSIC TIME',
+                          style: TextStyle(
+                              fontSize: 12,
+                              letterSpacing: 5,
+                              color: Colors.white54,
+                              fontWeight: FontWeight.w600)),
+                    ),
+                  ],
                 ),
               ),
-            ),
-          ),
-        ],
+            ],
+          );
+        },
       ),
     );
+  }
+}
+
+// ---------- تسلسل الشاشات: ترحيب ثم دخول ثم التطبيق ----------
+class _Flow extends StatefulWidget {
+  final bool onboarding;
+  final bool login;
+  final WidgetBuilder next;
+  const _Flow({required this.onboarding, required this.login, required this.next});
+  @override
+  State<_Flow> createState() => _FlowState();
+}
+
+class _FlowState extends State<_Flow> {
+  late int _stage = widget.onboarding ? 0 : (widget.login ? 1 : 2);
+
+  void _advance() {
+    setState(() {
+      if (_stage == 0 && widget.login) {
+        _stage = 1;
+      } else {
+        _stage = 2;
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final Widget child;
+    if (_stage == 0) {
+      child = OnboardingPage(key: const ValueKey('s0'), onDone: _advance);
+    } else if (_stage == 1) {
+      child = AuthScreen(key: const ValueKey('s1'), gate: true, onDone: _advance);
+    } else {
+      child = Builder(key: const ValueKey('s2'), builder: widget.next);
+    }
+    return AnimatedSwitcher(duration: const Duration(milliseconds: 450), child: child);
   }
 }
 
@@ -170,8 +166,8 @@ class _Slide {
 }
 
 class OnboardingPage extends StatefulWidget {
-  final WidgetBuilder next;
-  const OnboardingPage({super.key, required this.next});
+  final VoidCallback onDone;
+  const OnboardingPage({super.key, required this.onDone});
   @override
   State<OnboardingPage> createState() => _OnboardingPageState();
 }
@@ -184,12 +180,12 @@ class _OnboardingPageState extends State<OnboardingPage> with SingleTickerProvid
         ..repeat(reverse: true);
 
   static const _slides = [
-    _Slide(Icons.headphones_rounded, 'مرحبًا بك في musicApp',
+    _Slide(Icons.headphones_rounded, 'أهلًا بيك بـ MT',
         'مشغّل أغانيك الخاص، بتصميم أنيق وإحساس احترافي.'),
     _Slide(Icons.lyrics_rounded, 'كلمات تتحرك مع الأغنية',
         'اضغط أيقونة الكلمات بشاشة التشغيل، وشوف السطر الحالي يتلوّن مع الصوت.'),
-    _Slide(Icons.auto_awesome_rounded, 'مكتبتك بطريقتك',
-        'مفضلة وقوائم تشغيل وإحصائيات استماعك، وألوان تتغير مع كل غلاف.'),
+    _Slide(Icons.cloud_sync_rounded, 'مكتبتك وياك وين ما رحت',
+        'سجّل حساب وتنحفظ مفضلتك وقوائمك وأغانيك، وترجع لك على أي جوال.'),
   ];
 
   @override
@@ -203,11 +199,10 @@ class _OnboardingPageState extends State<OnboardingPage> with SingleTickerProvid
     final p = await SharedPreferences.getInstance();
     await p.setBool('onboarded', true);
     if (!mounted) return;
-    Navigator.of(context).pushReplacement(_fadeTo(widget.next));
+    widget.onDone();
   }
 
   Widget _slide(_Slide s) {
-    final a = context.accent;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 32),
       child: Column(
@@ -225,11 +220,11 @@ class _OnboardingPageState extends State<OnboardingPage> with SingleTickerProvid
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 gradient: LinearGradient(
-                  colors: [a, Color.lerp(a, Colors.black, 0.55)!],
+                  colors: [brandColor, brandDark()],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                 ),
-                boxShadow: [BoxShadow(color: a.withAlpha(100), blurRadius: 50)],
+                boxShadow: [BoxShadow(color: brandColor.withAlpha(100), blurRadius: 50)],
               ),
               child: Icon(s.icon, size: 76, color: Colors.white),
             ),
@@ -279,7 +274,7 @@ class _OnboardingPageState extends State<OnboardingPage> with SingleTickerProvid
                     width: i == _i ? 26 : 8,
                     height: 8,
                     decoration: BoxDecoration(
-                      color: i == _i ? context.accent : Colors.white24,
+                      color: i == _i ? brandColor : Colors.white24,
                       borderRadius: BorderRadius.circular(4),
                     ),
                   ),
@@ -291,6 +286,10 @@ class _OnboardingPageState extends State<OnboardingPage> with SingleTickerProvid
                 width: double.infinity,
                 height: 54,
                 child: FilledButton(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: brandColor,
+                    foregroundColor: Colors.white,
+                  ),
                   onPressed: () {
                     if (last) {
                       _finish();

@@ -3,6 +3,9 @@ import 'package:flutter/services.dart';
 import 'core.dart';
 import 'lyrics.dart';
 import 'widgets.dart';
+import 'cloud.dart';
+import 'cloud_pages.dart';
+import 'brand.dart';
 
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key});
@@ -21,6 +24,22 @@ class SettingsPage extends StatelessWidget {
         builder: (context, _) => ListView(
           padding: const EdgeInsets.only(bottom: 30),
           children: [
+            _section(context, 'الحساب'),
+            ListenableBuilder(
+              listenable: cloud,
+              builder: (context, _) => ListTile(
+                leading: CircleAvatar(
+                  backgroundColor: context.accent.withAlpha(50),
+                  child: Icon(cloud.signedIn ? Icons.cloud_done_outlined : Icons.cloud_outlined,
+                      color: context.accent),
+                ),
+                title: Text(cloud.signedIn ? (cloud.user?.email ?? 'حسابي') : 'تسجيل الدخول'),
+                subtitle: Text(cloud.signedIn ? 'المزامنة والسحابة' : 'احفظ مكتبتك بحسابك'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context)
+                    .push(MaterialPageRoute(builder: (_) => const CloudPage())),
+              ),
+            ),
             _section(context, 'المظهر'),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
@@ -139,9 +158,9 @@ class SettingsPage extends StatelessWidget {
             ),
             _section(context, 'حول'),
             const ListTile(
-              leading: Icon(Icons.music_note_rounded),
-              title: Text('musicApp'),
-              subtitle: Text('الإصدار 3.1'),
+              leading: BrandMark(size: 40),
+              title: Text('MT — Music Time'),
+              subtitle: Text('الإصدار 4.0'),
             ),
           ],
         ),
@@ -220,7 +239,7 @@ class _FixNamesPageState extends State<FixNamesPage> {
               itemCount: list.length,
               itemBuilder: (_, i) {
                 final s = list[i];
-                final bad = looksGarbled(s.title);
+                final isBad = looksGarbled(s.title);
                 return ListTile(
                   contentPadding: const EdgeInsets.symmetric(horizontal: 20),
                   leading: Art(id: s.id, size: 48, radius: 10),
@@ -231,8 +250,8 @@ class _FixNamesPageState extends State<FixNamesPage> {
                     style: const TextStyle(color: Colors.white54),
                   ),
                   trailing: Icon(
-                    bad ? Icons.warning_amber_rounded : Icons.edit_outlined,
-                    color: bad ? Colors.amber : Colors.white38,
+                    isBad ? Icons.warning_amber_rounded : Icons.edit_outlined,
+                    color: isBad ? Colors.amber : Colors.white38,
                   ),
                   onTap: () async {
                     await editSongInfo(context, s);

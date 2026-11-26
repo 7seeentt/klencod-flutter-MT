@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:on_audio_query_forked/on_audio_query.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show Supabase, OtpType, UserAttributes;
 import 'core.dart';
 import 'cloud.dart';
 import 'widgets.dart';
 import 'player_ui.dart';
+import 'brand.dart';
 
 String _ago(DateTime t) {
   final m = DateTime.now().difference(t).inMinutes;
@@ -14,14 +17,72 @@ String _ago(DateTime t) {
   return 'قبل ${h ~/ 24} يوم';
 }
 
-// ---------- تسجيل الدخول ----------
-class LoginPage extends StatefulWidget {
-  const LoginPage({super.key});
-  @override
-  State<LoginPage> createState() => _LoginPageState();
+String _errText(Object e) {
+  String m;
+  try {
+    m = (e as dynamic).message.toString();
+  } catch (_) {
+    m = e.toString();
+  }
+  final l = m.toLowerCase();
+  if (l.contains('invalid') && (l.contains('token') || l.contains('otp'))) {
+    return 'الرمز غلط أو انتهت صلاحيته';
+  }
+  if (l.contains('rate limit') || l.contains('too many')) {
+    return 'محاولات كثيرة، انتظر شوي وجرّب';
+  }
+  if (l.contains('socket') || l.contains('network') || l.contains('failed host')) {
+    return 'ما في اتصال بالإنترنت';
+  }
+  if (l.contains('same password') || l.contains('different from the old')) {
+    return 'اختر كلمة سر مختلفة عن القديمة';
+  }
+  return m;
 }
 
-class _LoginPageState extends State<LoginPage> {
+Future<String?> _sendReset(String email) async {
+  try {
+    await Supabase.instance.client.auth.resetPasswordForEmail(email.trim());
+    return null;
+  } catch (e) {
+    return _errText(e);
+  }
+}
+
+Future<String?> _confirmReset(String email, String code, String newPw) async {
+  try {
+    final c = Supabase.instance.client;
+    await c.auth.verifyOTP(email: email.trim(), token: code.trim(), type: OtpType.recovery);
+    await c.auth.updateUser(UserAttributes(password: newPw));
+    return null;
+  } catch (e) {
+    return _errText(e);
+  }
+}
+
+InputDecoration _dec(BuildContext c, String label, IconData icon, {Widget? suffix}) =>
+    InputDecoration(
+      labelText: label,
+      prefixIcon: Icon(icon),
+      suffixIcon: suffix,
+      filled: true,
+      fillColor: c.card,
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(16),
+        borderSide: BorderSide.none,
+      ),
+    );
+
+// ---------- شاشة الدخول / إنشاء الحساب ----------
+class AuthScreen extends StatefulWidget {
+  final bool gate;
+  final VoidCallback? onDone;
+  const AuthScreen({super.key, this.gate = false, this.onDone});
+  @override
+  State<AuthScreen> createState() => _AuthScreenState();
+}
+
+class _AuthScreenState extends State<AuthScreen> {
   final _email = TextEditingController();
   final _pw = TextEditingController();
   bool _signup = false;
@@ -35,6 +96,17 @@ class _LoginPageState extends State<LoginPage> {
     _email.dispose();
     _pw.dispose();
     super.dispose();
+  }
+
+  void _finish() {
+    if (widget.gate) {
+      // نعيد المزامنة بعد ما تتحمل المكتبة عشان تنربط المفضلة بالأغاني
+      Future.delayed(const Duration(seconds: 6), cloud.startupSync);
+      Future.delayed(const Duration(seconds: 15), cloud.startupSync);
+      widget.onDone?.call();
+    } else {
+      Navigator.of(context).pop();
+    }
   }
 
   Future<void> _submit() async {
@@ -52,7 +124,7 @@ class _LoginPageState extends State<LoginPage> {
     final r = _signup ? await cloud.signUp(e, p) : await cloud.signIn(e, p);
     if (!mounted) return;
     if (r == null) {
-      Navigator.of(context).pop();
+      _finish();
       return;
     }
     setState(() {
@@ -66,104 +138,277 @@ class _LoginPageState extends State<LoginPage> {
     });
   }
 
+  Future<void> _skip() async {
+    final p = await SharedPreferences.getInstance();
+    await p.setBool('guest', true);
+    widget.onDone?.call();
+  }
+
+  Future<void> _forgot() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => _ResetDialog(email: _email.text.trim()),
+    );
+    if (ok == true && mounted) _finish();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final a = context.accent;
     return Scaffold(
-      appBar: AppBar(backgroundColor: Colors.transparent),
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 28),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 84,
-                height: 84,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: LinearGradient(
-                    colors: [a, Color.lerp(a, Colors.black, 0.5)!],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: RadialGradient(
+                  center: const Alignment(0, -0.85),
+                  radius: 1.1,
+                  colors: [brandColor.withAlpha(60), Colors.transparent],
+                ),
+              ),
+            ),
+          ),
+          SafeArea(
+            child: Column(
+              children: [
+                if (!widget.gate)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: IconButton(
+                      icon: const Icon(Icons.arrow_back),
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
+                  ),
+                Expanded(
+                  child: Center(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.symmetric(horizontal: 28),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const BrandMark(size: 92),
+                          const SizedBox(height: 18),
+                          const Text('MT',
+                              style: TextStyle(
+                                  fontSize: 30, fontWeight: FontWeight.w800, letterSpacing: 6)),
+                          const Text('MUSIC TIME',
+                              style: TextStyle(
+                                  fontSize: 11, letterSpacing: 4, color: Colors.white54)),
+                          const SizedBox(height: 30),
+                          Text(_signup ? 'إنشاء حساب جديد' : 'أهلًا بيك',
+                              style: const TextStyle(fontSize: 21, fontWeight: FontWeight.bold)),
+                          const SizedBox(height: 6),
+                          const Text('مفضلتك وقوائمك وأغانيك تنحفظ بحسابك',
+                              style: TextStyle(color: Colors.white54)),
+                          const SizedBox(height: 22),
+                          TextField(
+                            controller: _email,
+                            keyboardType: TextInputType.emailAddress,
+                            autocorrect: false,
+                            decoration: _dec(context, 'الإيميل', Icons.email_outlined),
+                          ),
+                          const SizedBox(height: 12),
+                          TextField(
+                            controller: _pw,
+                            obscureText: _hide,
+                            onSubmitted: (_) => _submit(),
+                            decoration: _dec(
+                              context,
+                              'كلمة السر',
+                              Icons.lock_outline,
+                              suffix: IconButton(
+                                icon: Icon(_hide ? Icons.visibility_off : Icons.visibility),
+                                onPressed: () => setState(() => _hide = !_hide),
+                              ),
+                            ),
+                          ),
+                          if (_err != null)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 12),
+                              child: Text(_err!,
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(color: Colors.redAccent)),
+                            ),
+                          if (_info != null)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 12),
+                              child: Text(_info!, textAlign: TextAlign.center),
+                            ),
+                          const SizedBox(height: 20),
+                          SizedBox(
+                            width: double.infinity,
+                            height: 52,
+                            child: FilledButton(
+                              style: FilledButton.styleFrom(
+                                backgroundColor: brandColor,
+                                foregroundColor: Colors.white,
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(16)),
+                              ),
+                              onPressed: _busy ? null : _submit,
+                              child: _busy
+                                  ? const SizedBox(
+                                      width: 22,
+                                      height: 22,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2.5, color: Colors.white))
+                                  : Text(_signup ? 'إنشاء الحساب' : 'دخول',
+                                      style: const TextStyle(fontSize: 16)),
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          if (!_signup)
+                            TextButton(
+                              onPressed: _forgot,
+                              child: const Text('نسيت كلمة السر؟',
+                                  style: TextStyle(color: Colors.white60)),
+                            ),
+                          TextButton(
+                            onPressed: () => setState(() {
+                              _signup = !_signup;
+                              _err = null;
+                              _info = null;
+                            }),
+                            child: Text(_signup ? 'عندي حساب، سجّل دخول' : 'ما عندي حساب، أنشئ حساب'),
+                          ),
+                          if (widget.gate)
+                            TextButton(
+                              onPressed: _skip,
+                              child: const Text('المتابعة بدون حساب',
+                                  style: TextStyle(color: Colors.white38)),
+                            ),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
-                child: const Icon(Icons.cloud_sync_rounded, size: 42, color: Colors.white),
-              ),
-              const SizedBox(height: 18),
-              Text(_signup ? 'إنشاء حساب' : 'تسجيل الدخول',
-                  style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 6),
-              const Text('مفضلتك وقوائمك وأغانيك تنحفظ بحسابك',
-                  style: TextStyle(color: Colors.white54)),
-              const SizedBox(height: 24),
-              TextField(
-                controller: _email,
-                keyboardType: TextInputType.emailAddress,
-                autocorrect: false,
-                decoration: InputDecoration(
-                  labelText: 'الإيميل',
-                  prefixIcon: const Icon(Icons.email_outlined),
-                  filled: true,
-                  fillColor: context.card,
-                  border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
-                ),
-              ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------- نافذة استعادة كلمة السر ----------
+class _ResetDialog extends StatefulWidget {
+  final String email;
+  const _ResetDialog({required this.email});
+  @override
+  State<_ResetDialog> createState() => _ResetDialogState();
+}
+
+class _ResetDialogState extends State<_ResetDialog> {
+  late final TextEditingController _e = TextEditingController(text: widget.email);
+  final _code = TextEditingController();
+  final _pw = TextEditingController();
+  int _step = 0;
+  bool _busy = false;
+  String? _err;
+
+  @override
+  void dispose() {
+    _e.dispose();
+    _code.dispose();
+    _pw.dispose();
+    super.dispose();
+  }
+
+  Future<void> _send() async {
+    if (!_e.text.contains('@')) {
+      setState(() => _err = 'اكتب إيميل صحيح');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _err = null;
+    });
+    final r = await _sendReset(_e.text);
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      if (r == null) {
+        _step = 1;
+      } else {
+        _err = r;
+      }
+    });
+  }
+
+  Future<void> _confirm() async {
+    if (_code.text.trim().length < 6 || _pw.text.length < 6) {
+      setState(() => _err = 'اكتب الرمز اللي وصلك وكلمة سر جديدة 6 أحرف على الأقل');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _err = null;
+    });
+    final r = await _confirmReset(_e.text, _code.text, _pw.text);
+    if (!mounted) return;
+    if (r == null) {
+      Navigator.pop(context, true);
+      return;
+    }
+    setState(() {
+      _busy = false;
+      _err = r;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: context.card,
+      title: const Text('استعادة كلمة السر'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (_step == 0) ...[
+              const Text('اكتب إيميلك وراح نرسل لك رمز.',
+                  style: TextStyle(color: Colors.white60)),
               const SizedBox(height: 12),
               TextField(
+                controller: _e,
+                keyboardType: TextInputType.emailAddress,
+                decoration: const InputDecoration(labelText: 'الإيميل'),
+              ),
+            ] else ...[
+              Text('أرسلنا رمز إلى ${_e.text}',
+                  style: const TextStyle(color: Colors.white60)),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _code,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'الرمز'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
                 controller: _pw,
-                obscureText: _hide,
-                onSubmitted: (_) => _submit(),
-                decoration: InputDecoration(
-                  labelText: 'كلمة السر',
-                  prefixIcon: const Icon(Icons.lock_outline),
-                  suffixIcon: IconButton(
-                    icon: Icon(_hide ? Icons.visibility_off : Icons.visibility),
-                    onPressed: () => setState(() => _hide = !_hide),
-                  ),
-                  filled: true,
-                  fillColor: context.card,
-                  border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
-                ),
-              ),
-              if (_err != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 12),
-                  child: Text(_err!,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.redAccent)),
-                ),
-              if (_info != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 12),
-                  child: Text(_info!, textAlign: TextAlign.center),
-                ),
-              const SizedBox(height: 20),
-              SizedBox(
-                width: double.infinity,
-                height: 52,
-                child: FilledButton(
-                  onPressed: _busy ? null : _submit,
-                  child: _busy
-                      ? const SizedBox(
-                          width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.5))
-                      : Text(_signup ? 'إنشاء الحساب' : 'دخول', style: const TextStyle(fontSize: 16)),
-                ),
-              ),
-              TextButton(
-                onPressed: () => setState(() {
-                  _signup = !_signup;
-                  _err = null;
-                  _info = null;
-                }),
-                child: Text(_signup ? 'عندي حساب، سجّل دخول' : 'ما عندي حساب، أنشئ حساب'),
+                obscureText: true,
+                decoration: const InputDecoration(labelText: 'كلمة السر الجديدة'),
               ),
             ],
-          ),
+            if (_err != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Text(_err!, style: const TextStyle(color: Colors.redAccent)),
+              ),
+          ],
         ),
       ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('إلغاء')),
+        FilledButton(
+          onPressed: _busy ? null : (_step == 0 ? _send : _confirm),
+          child: _busy
+              ? const SizedBox(
+                  width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+              : Text(_step == 0 ? 'إرسال الرمز' : 'تأكيد'),
+        ),
+      ],
     );
   }
 }
@@ -225,8 +470,8 @@ class CloudPage extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.cloud_outlined, size: 72, color: context.accent),
-              const SizedBox(height: 16),
+              const BrandMark(size: 84),
+              const SizedBox(height: 20),
               const Text('احفظ مكتبتك بحسابك',
                   style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
               const SizedBox(height: 10),
@@ -237,8 +482,10 @@ class CloudPage extends StatelessWidget {
               ),
               const SizedBox(height: 22),
               FilledButton.icon(
+                style: FilledButton.styleFrom(
+                    backgroundColor: brandColor, foregroundColor: Colors.white),
                 onPressed: () => Navigator.of(context)
-                    .push(MaterialPageRoute(builder: (_) => const LoginPage())),
+                    .push(MaterialPageRoute(builder: (_) => const AuthScreen())),
                 icon: const Icon(Icons.login),
                 label: const Text('تسجيل الدخول / حساب جديد'),
               ),
@@ -315,7 +562,7 @@ class CloudPage extends StatelessWidget {
                   children: [
                     Text(u.email ?? '',
                         maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                        overflow: TextOverflow.ellips
                         style: const TextStyle(fontWeight: FontWeight.bold)),
                     Text(
                       cloud.lastSync == null
@@ -548,8 +795,9 @@ class _UploadPickerPageState extends State<UploadPickerPage> {
           Expanded(
             child: _all.isEmpty
                 ? const Center(
-                    child: Text('كل أغانيك مرفوعة أو ما في أغاني', style: TextStyle(color: Colors.white54)))
-                    : ListView.builder(
+                    child: Text('كل أغانيك مرفوعة أو ما في أغاني',
+                        style: TextStyle(color: Colors.white54)))
+                : ListView.builder(
                     itemCount: list.length,
                     itemBuilder: (_, i) {
                       final s = list[i];

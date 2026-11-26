@@ -12,7 +12,7 @@
 
     <application
         android:requestLegacyExternalStorage="true"
-        android:label="musicApp"
+        android:label="MT"
         android:icon="@drawable/ic_launcher"
         android:theme="@style/NormalTheme">
 
